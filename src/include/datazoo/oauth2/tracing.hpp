@@ -40,8 +40,30 @@ inline void EmitTraceLine(const char *level, const std::string &component, const
 #endif
 }
 
+// Minimal stand-in for erpl-web's ErplTracer singleton (tracing.hpp), whose
+// only use in the moved http_client.cpp is a single `IsEnabled()` check that
+// gates an extra httplib logger callback (itself only for local debugging).
+// The heavier machinery (levels, file rotation, output modes) is genuinely
+// out of scope for this library.
+class SimpleTracer {
+public:
+    static SimpleTracer &Instance() {
+        static SimpleTracer instance;
+        return instance;
+    }
+    bool IsEnabled() const {
+        return TracingEnabledAtRuntime();
+    }
+};
+
 } // namespace datazoo_oauth2
 } // namespace duckdb
+
+namespace erpl_web {
+// Alias so moved .cpp files that call `ErplTracer::Instance().IsEnabled()`
+// (originally erpl-web's tracing.hpp singleton) keep compiling unchanged.
+using ErplTracer = ::duckdb::datazoo_oauth2::SimpleTracer;
+} // namespace erpl_web
 
 #define ERPL_TRACE_ERROR(component, message) \
     ::duckdb::datazoo_oauth2::EmitTraceLine("ERROR", component, message)
