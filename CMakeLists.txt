@@ -113,3 +113,23 @@ if(Catch2_FOUND)
 else()
     message(STATUS "datazoo-oauth2: Catch2 3 not found, unit test target skipped.")
 endif()
+
+# ---------------------------------------------------------------------------
+# S-0.15 / REQ-A-03: zero-vendor-names CI gate, wired into the build so it
+# runs the same way locally and in CI (`cmake --build build --target
+# check_no_vendor_names`, or via `ctest` alongside the unit tests).
+# ---------------------------------------------------------------------------
+find_program(DATAZOO_OAUTH2_BASH_EXE bash)
+if(DATAZOO_OAUTH2_BASH_EXE)
+    add_custom_target(check_no_vendor_names
+        COMMAND ${DATAZOO_OAUTH2_BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_no_vendor_names.sh
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        COMMENT "Checking src/ for vendor-specific code (REQ-A-03)"
+        VERBATIM
+    )
+    include(CTest)
+    add_test(NAME check_no_vendor_names
+        COMMAND ${DATAZOO_OAUTH2_BASH_EXE} ${CMAKE_CURRENT_SOURCE_DIR}/scripts/check_no_vendor_names.sh
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+endif()

@@ -412,7 +412,7 @@ void OAuth2FlowV2::DisplayOAuth2Instructions(const std::string& auth_url) {
 
     std::cout << " 🌐  " << auth_url << "\n\n";
 
-    std::cout << "3️⃣ Sign in with your SAP Datasphere credentials\n";
+    std::cout << "3️⃣ Sign in with your identity provider credentials\n";
     std::cout << "4️⃣ Grant permission to the application\n";
     std::cout << "5️⃣ You'll be redirected back automatically\n\n";
 
