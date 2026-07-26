@@ -44,6 +44,7 @@ set(DATAZOO_OAUTH2_PURE_SOURCES
     src/oauth2_types.cpp
     src/oauth2_browser.cpp
     src/oauth2_callback_handler.cpp
+    src/oauth2_url_pure.cpp
 )
 
 # DuckDB-coupled sources: need duckdb.hpp and/or DuckDB's vendored httplib.
