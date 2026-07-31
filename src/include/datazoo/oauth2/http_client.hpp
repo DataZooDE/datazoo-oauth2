@@ -1,5 +1,7 @@
 #pragma once
 
+#include "datazoo/oauth2/odata_version.hpp"
+
 // Windows headers define min/max macros that conflict with C++ std:: functions
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -19,17 +21,8 @@ using namespace duckdb;
 namespace erpl_web
 {
 
-// Minimal stand-in for erpl-web's ODataVersion (originally declared in the
-// ~2500-line odata_edm.hpp, which is OData-specific and out of scope for a
-// provider-agnostic OAuth2 library -- see docs/EXTRACTION_NOTES.md). Only
-// the two members HttpRequest actually uses are reproduced; the OData
-// version-header logic in HttpRequest::AddODataVersionHeaders() is otherwise
-// untouched.
-enum class ODataVersion {
-    UNKNOWN,
-    V2,
-    V4
-};
+// ODataVersion now lives in its own dependency-free header -- see the note
+// there for why it is not declared inline here any more.
 
 using HeaderMap = case_insensitive_map_t<string>;
 class HttpClient; // forward declaration
