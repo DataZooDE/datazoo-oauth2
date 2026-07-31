@@ -80,6 +80,23 @@ if(DATAZOO_OAUTH2_HAS_PARENT)
     elseif(WIN32)
         target_link_libraries(datazoo_oauth2 PUBLIC shell32)
     endif()
+
+    # DuckDB installs and EXPORTS the consuming extension target. CMake refuses
+    # to export a target that links one which is not itself in an export set:
+    #
+    #   install(EXPORT "DuckDBExports" ...) includes target "<ext>_extension"
+    #   which requires target "datazoo_oauth2" that is not in any export set.
+    #
+    # Guarded on the variable being defined so a non-DuckDB parent (or the
+    # standalone build) is unaffected. Same pattern as posthog-telemetry.
+    if(DEFINED DUCKDB_EXPORT_SET)
+        install(
+            TARGETS datazoo_oauth2
+            EXPORT "${DUCKDB_EXPORT_SET}"
+            LIBRARY DESTINATION "${INSTALL_LIB_DIR}"
+            ARCHIVE DESTINATION "${INSTALL_LIB_DIR}"
+        )
+    endif()
 else()
     message(STATUS
         "datazoo-oauth2: configuring standalone (no parent project). "
