@@ -1,0 +1,9 @@
+{
+    "name": "datazoo-oauth2",
+    "version-string": "0.1.0",
+    "description": "Provider-agnostic OAuth2 for DuckDB extensions",
+    "dependencies": [
+        "openssl",
+        "catch2"
+    ]
+}
