@@ -66,6 +66,20 @@ if(DATAZOO_OAUTH2_HAS_PARENT)
     target_include_directories(datazoo_oauth2 PUBLIC src/include)
     target_compile_features(datazoo_oauth2 PUBLIC cxx_std_17)
     target_link_libraries(datazoo_oauth2 PUBLIC OpenSSL::SSL OpenSSL::Crypto)
+
+    # See the note on the unit-test target below: oauth2_browser.cpp needs
+    # platform libraries on macOS and Windows. PUBLIC so a consumer linking
+    # this static library inherits them -- otherwise the undefined symbols
+    # surface in the CONSUMER's link step, which is a considerably worse place
+    # to find out.
+    if(APPLE)
+        target_link_libraries(datazoo_oauth2 PUBLIC
+            "-framework CoreFoundation"
+            "-framework ApplicationServices"
+        )
+    elseif(WIN32)
+        target_link_libraries(datazoo_oauth2 PUBLIC shell32)
+    endif()
 else()
     message(STATUS
         "datazoo-oauth2: configuring standalone (no parent project). "
@@ -91,6 +105,23 @@ if(Catch2_FOUND)
             Catch2::Catch2WithMain
             OpenSSL::Crypto
         )
+
+        # oauth2_browser.cpp opens the system browser through platform APIs.
+        # On Linux that is fork/exec and needs nothing; on macOS and Windows it
+        # needs libraries the linker will not find by itself. This never
+        # surfaced before CI existed, because the library had only ever been
+        # built on Linux -- which is the entire argument for having CI here
+        # rather than discovering it in a consumer's release build.
+        if(APPLE)
+            target_link_libraries(datazoo_oauth2_unit_tests PRIVATE
+                "-framework CoreFoundation"
+                "-framework ApplicationServices"
+            )
+        elseif(WIN32)
+            # ShellExecute* lives in shell32.
+            target_link_libraries(datazoo_oauth2_unit_tests PRIVATE shell32)
+        endif()
+
         set_target_properties(datazoo_oauth2_unit_tests PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/test"
         )
