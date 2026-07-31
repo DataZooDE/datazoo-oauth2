@@ -17,6 +17,36 @@
 // stderr line logging, which is useful while debugging a flow locally.
 //
 // This header intentionally does not reference any vendor/provider name.
+//
+// ---------------------------------------------------------------------------
+// Consumers with their own tracer: define DATAZOO_OAUTH2_USE_HOST_TRACING.
+//
+// The shim below defines ERPL_TRACE_* macros AND an `erpl_web::ErplTracer`
+// alias. A consumer that already has both -- which is the case for the
+// codebase these sources came from, whose tracing.hpp declares a real
+// `class ErplTracer` and its own macros -- would hit a macro redefinition and
+// an outright type conflict in every translation unit that sees both headers.
+//
+// So when DATAZOO_OAUTH2_USE_HOST_TRACING is defined, this header defines
+// NOTHING and the host's tracing header is expected to be on the include path
+// and included first (the library's .cpp files include it via this header).
+// That is deterministic, unlike an `#ifndef ERPL_TRACE_ERROR` guard, which
+// would silently depend on include order.
+// ---------------------------------------------------------------------------
+
+#if defined(DATAZOO_OAUTH2_USE_HOST_TRACING)
+
+// The host owns the macros and the tracer type. Pull its header in so the
+// moved .cpp files -- which include only this one -- still resolve them.
+//
+// Angle brackets, not quotes, and it matters: a quoted include searches the
+// includer's own directory first, so `"tracing.hpp"` from THIS file resolves
+// to THIS file, which `#pragma once` then turns into a silent no-op --
+// leaving every macro undefined. Angle brackets search only the -I path,
+// where the host's src/include lives.
+#include <tracing.hpp> // NOLINT: resolved from the CONSUMER's include path
+
+#else
 
 #include <cstdlib>
 #include <iostream>
@@ -75,3 +105,5 @@ using ErplTracer = ::duckdb::datazoo_oauth2::SimpleTracer;
     ::duckdb::datazoo_oauth2::EmitTraceLine("DEBUG", component, message)
 #define ERPL_TRACE_TRACE(component, message) \
     ::duckdb::datazoo_oauth2::EmitTraceLine("TRACE", component, message)
+
+#endif // DATAZOO_OAUTH2_USE_HOST_TRACING
