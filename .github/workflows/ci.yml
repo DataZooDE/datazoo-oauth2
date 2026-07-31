@@ -44,10 +44,23 @@ jobs:
         with:
           vcpkgGitCommitId: 542289e02dec80d057e30f3d7a101c374a94d804
 
+      # x64-windows-static, not the x64-windows default. CMakeLists.txt forces
+      # MSVC_RUNTIME_LIBRARY=MultiThreaded (/MT) on the test binary because
+      # that is what the DuckDB extensions consuming this library build with.
+      # Against the default DLL triplet those deps are /MD and the link fails
+      # with LNK2038. Pinning the triplet here keeps the standalone build
+      # consistent with how the library is actually consumed, rather than
+      # making the /MT choice a lie on one platform.
+      - name: Select static triplet on Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "VCPKG_TARGET_TRIPLET=x64-windows-static" >> "$GITHUB_ENV"
+
       - name: Configure
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
+          ${{ runner.os == 'Windows' && '-DVCPKG_TARGET_TRIPLET=x64-windows-static' || '' }}
           -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
 
       - name: Build
