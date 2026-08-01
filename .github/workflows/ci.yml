@@ -56,6 +56,30 @@ jobs:
         shell: bash
         run: echo "VCPKG_TARGET_TRIPLET=x64-windows-static" >> "$GITHUB_ENV"
 
+      # Classic-mode install, NOT a vcpkg.json manifest -- and that is a
+      # deliberate constraint, not a style choice.
+      #
+      # This repo is consumed as a git SUBMODULE by DuckDB extensions, whose
+      # CI resolves the manifest with the glob '**/vcpkg.json'. A vcpkg.json
+      # anywhere in this tree is therefore a SECOND match in the consumer's
+      # checkout, and vcpkg may pick ours -- which lists openssl and catch2
+      # and none of the consumer's real dependencies. The consumer's build
+      # then fails somewhere far away with a missing package.
+      #
+      # That is not hypothetical: adding a manifest here broke duckdb-gdrive's
+      # Windows LTS build, and the only visible clue was a warning reading
+      # "The file vcpkg.json was found multiple times". Note that a
+      # subdirectory would not help -- ** matches any depth. The sibling
+      # submodule posthog-telemetry carries no manifest for the same reason.
+      - name: Install dependencies
+        shell: bash
+        run: |
+          triplet="${VCPKG_TARGET_TRIPLET:-}"
+          args=""
+          [ -n "$triplet" ] && args="--triplet $triplet"
+          "$VCPKG_ROOT/vcpkg" install openssl catch2 $args \
+            || "$VCPKG_ROOT/vcpkg.exe" install openssl catch2 $args
+
       - name: Configure
         run: >
           cmake -S . -B build
