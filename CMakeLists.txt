@@ -108,6 +108,23 @@ endif()
 # ---------------------------------------------------------------------------
 # Catch2 unit tests -- pure-logic only, no DuckDB linkage, no network.
 # ---------------------------------------------------------------------------
+# Only when we are the top-level project. A consumer that add_subdirectory()s
+# this library wants the library, not its test suite.
+#
+# Building them in a consumer's tree is not merely wasteful, it breaks the
+# build: vcpkg ships Catch2 against the DYNAMIC CRT (/MD) while a DuckDB
+# extension compiles its sources against the STATIC one (/MT), so the link
+# fails with
+#
+#   Catch2.lib(catch_stringref.cpp.obj) : error LNK2038: mismatch detected for
+#   'RuntimeLibrary': value 'MD_DynamicRelease' doesn't match value
+#   'MT_StaticRelease' in oauth2_types.cpp.obj
+#
+# That is what broke duckdb-gdrive's Windows LTS build. It surfaced there and
+# not in erpl-web purely because gdrive's vcpkg manifest happens to include
+# catch2, so find_package succeeded and the target got built; erpl-web's does
+# not, so it was silently skipped. Consumers should not depend on that luck.
+if(NOT DATAZOO_OAUTH2_HAS_PARENT)
 find_package(Catch2 3 CONFIG QUIET)
 if(Catch2_FOUND)
     file(GLOB DATAZOO_OAUTH2_TEST_SOURCES CONFIGURE_DEPENDS test/test_*.cpp)
@@ -161,6 +178,7 @@ if(Catch2_FOUND)
 else()
     message(STATUS "datazoo-oauth2: Catch2 3 not found, unit test target skipped.")
 endif()
+endif() # NOT DATAZOO_OAUTH2_HAS_PARENT
 
 # ---------------------------------------------------------------------------
 # S-0.15 / REQ-A-03: zero-vendor-names CI gate, wired into the build so it
