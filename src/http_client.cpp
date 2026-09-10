@@ -74,7 +74,11 @@ static std::string RedactHeaderValue(const std::string &name, const std::string 
 
 // Credential field names that must be redacted in request/response bodies
 static const std::vector<std::string> kSensitiveBodyFields = {
-    "client_secret", "password", "access_token", "refresh_token"
+    "client_secret", "password", "access_token", "refresh_token",
+    // An id_token is a bearer assertion about the user; a client_assertion is a
+    // signed credential; an authorization code plus its verifier can still be
+    // exchanged for tokens. All are as sensitive as the four above.
+    "id_token", "client_assertion", "code", "code_verifier"
 };
 
 // Redacts credential values in form-encoded (field=VALUE&...) and JSON ("field":"VALUE") bodies.
@@ -109,11 +113,16 @@ static std::string RedactBody(const std::string &body) {
                 }
                 if (pos < result.size() && result[pos] == '"') {
                     ++pos;
+                    // An unterminated value still has to be redacted. Trace bodies are
+                    // truncated before they reach here, so the cut regularly lands in the
+                    // middle of a token and leaves no closing quote - bailing out then
+                    // would print the visible prefix of an access_token verbatim.
                     size_t end = result.find('"', pos);
-                    if (end != std::string::npos) {
-                        result.replace(pos, end - pos, "***");
-                        pos += 3;
+                    if (end == std::string::npos) {
+                        end = result.size();
                     }
+                    result.replace(pos, end - pos, "***");
+                    pos += 3;
                 }
             }
         }
@@ -1324,15 +1333,22 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
             ERPL_TRACE_DEBUG("HTTP_WIRE", "Request: " + req.method + " " + req.path);
             ERPL_TRACE_DEBUG("HTTP_WIRE", "Request body length: " + std::to_string(req.body.size()));
             if (!req.body.empty()) {
-                ERPL_TRACE_DEBUG("HTTP_WIRE", "Request body: " + req.body.substr(0, 500) +
-                               (req.body.size() > 500 ? "..." : ""));
+                // Redacted: this is the path an OAuth2 token POST takes, so printing it
+                // verbatim wrote client_secret (and previously id_token, client_assertion,
+                // code and code_verifier) straight into the trace, bypassing RedactBody.
+                const bool truncated = req.body.size() > 500;
+                ERPL_TRACE_DEBUG("HTTP_WIRE", "Request body: " +
+                                 RedactBody(truncated ? req.body.substr(0, 500) : req.body) +
+                                 (truncated ? "..." : ""));
             }
             ERPL_TRACE_DEBUG("HTTP_WIRE", "=== RESPONSE ===");
             ERPL_TRACE_DEBUG("HTTP_WIRE", "Response status: " + std::to_string(res.status));
             ERPL_TRACE_DEBUG("HTTP_WIRE", "Response content-type: " + res.get_header_value("Content-Type"));
             ERPL_TRACE_DEBUG("HTTP_WIRE", "Response body length: " + std::to_string(res.body.size()));
-            ERPL_TRACE_DEBUG("HTTP_WIRE", "Response body preview: " + res.body.substr(0, 200) +
-                           (res.body.size() > 200 ? "..." : ""));
+            const bool response_truncated = res.body.size() > 200;
+            ERPL_TRACE_DEBUG("HTTP_WIRE", "Response body preview: " +
+                             RedactBody(response_truncated ? res.body.substr(0, 200) : res.body) +
+                             (response_truncated ? "..." : ""));
         });
     }
 
