@@ -89,6 +89,39 @@ private:
 
 // ----------------------------------------------------------------------
 
+// Process-wide TLS policy for every outbound HTTPS request this library makes.
+//
+// Server-certificate verification is ON by default (fail closed). The only way
+// to turn it off is for the embedding extension to call
+// SetServerCertVerificationEnabled(false) from an explicitly named, explicitly
+// set configuration option -- there is no code path that disables verification
+// implicitly.
+//
+// Prefer TrustedCaCertFile() over disabling verification: pointing at the CA
+// that signed an on-premise certificate keeps the connection authenticated,
+// whereas disabling verification accepts any certificate from anyone.
+class HttpTlsPolicy
+{
+public:
+    static constexpr bool DEFAULT_VERIFY_SERVER_CERTIFICATE = true;
+
+    static bool ServerCertVerificationEnabled();
+    static void SetServerCertVerificationEnabled(bool enabled);
+
+    // Explicit CA bundle (PEM) to trust in addition to nothing else; empty means
+    // "use the platform trust store".
+    static std::string TrustedCaCertFile();
+    static void SetTrustedCaCertFile(const std::string &path);
+
+    // Best-effort location of the platform CA bundle, used when no explicit
+    // bundle is configured and the linked OpenSSL has no usable default path
+    // (the common case for a statically linked, vcpkg-built OpenSSL on Linux).
+    // Returns an empty string when the platform trust store should be used as-is.
+    static std::string ResolveSystemCaCertFile();
+};
+
+// ----------------------------------------------------------------------
+
 struct HttpParams {
 
 	static constexpr uint64_t DEFAULT_TIMEOUT = 30000; // 30 sec
@@ -110,6 +143,12 @@ struct HttpParams {
 	bool keep_alive;
     bool url_encode;
 	uint64_t max_redirects;
+
+	// TLS policy for this request, seeded from HttpTlsPolicy at construction so
+	// that the ~20 default-constructed HttpParams call sites inherit the secure
+	// default without every one of them needing a ClientContext.
+	bool enable_server_cert_verification;
+	std::string ca_cert_file;
 };
 
 // Helper function to check for HTTP redirect status codes
