@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <functional>
 #include <regex>
 #include <sstream>
 #include <vector>
@@ -118,6 +119,72 @@ static std::string RedactBody(const std::string &body) {
         }
     }
     return result;
+}
+
+// ----------------------------------------------------------------------
+// Verbatim request target (GitHub erpl-web#126)
+//
+// httplib's client always splits the request path on the first '?',
+// form-decodes the query half into Request::params and rebuilds it with
+// application/x-www-form-urlencoded rules: a space becomes '+', a literal '+'
+// becomes "%2B" and a nested '=' becomes "%3D". set_path_encode() (aliased as
+// set_url_encode()) guards only the *path* half, so a caller that has already
+// percent-encoded its query -- every OData code path in this ecosystem does --
+// still sees "$filter=Country%20eq%20%27UK%27" leave the socket as
+// "$filter=Country+eq+'UK'". RFC 3986 gives '+' no special meaning in a query;
+// only form encoding reads it as a space, so a strict service (SAP Gateway is
+// the concern) may take those plus signs literally.
+//
+// The rebuild lives in the private, non-virtual ClientImpl::write_request and
+// cannot be pre-compensated for: encode_query_component() emits "%20" for no
+// input whatsoever, so no choice of bytes in Request::path survives the round
+// trip. The one extension point httplib offers inside that function is the
+// header writer, which runs against the same in-memory BufferStream directly
+// after the request line was written and before a single byte is flushed to the
+// socket. Pinning the request line there is therefore the only way to put our
+// own bytes on the wire without patching the vendored httplib.
+static constexpr const char *kHttpVersionSuffix = " HTTP/1.1\r\n";
+
+using HttplibHeaderWriter =
+    std::function<ssize_t(duckdb_httplib_openssl::Stream &, duckdb_httplib_openssl::Headers &)>;
+
+static HttplibHeaderWriter MakeVerbatimTargetHeaderWriter(const std::string &method, const std::string &target)
+{
+    const std::string request_line = method + " " + target + kHttpVersionSuffix;
+    // httplib passes the path half through untouched while path encoding is off,
+    // so this is what the buffered request line must start with if it is ours.
+    const std::string expected_prefix = method + " " + target.substr(0, target.find('?'));
+
+    return [request_line, expected_prefix](duckdb_httplib_openssl::Stream &stream,
+                                           duckdb_httplib_openssl::Headers &headers) -> ssize_t {
+        auto *buffer_stream = dynamic_cast<duckdb_httplib_openssl::detail::BufferStream *>(&stream);
+        if (buffer_stream != nullptr) {
+            // get_buffer() hands out a const reference to an object that is not
+            // itself const, so the cast is well defined. It is the only access
+            // path to the request line httplib has just written.
+            auto &buffer = const_cast<std::string &>(buffer_stream->get_buffer());
+            const std::string suffix(kHttpVersionSuffix);
+            const bool is_untouched_request_line =
+                buffer.size() > expected_prefix.size() + suffix.size() &&
+                buffer.compare(0, expected_prefix.size(), expected_prefix) == 0 &&
+                (buffer[expected_prefix.size()] == '?' || buffer[expected_prefix.size()] == ' ') &&
+                buffer.compare(buffer.size() - suffix.size(), suffix.size(), suffix) == 0;
+
+            if (is_untouched_request_line) {
+                if (buffer != request_line) {
+                    ERPL_TRACE_DEBUG("HTTP_WIRE",
+                                     "Restoring verbatim request target; httplib had rewritten it to: " + buffer);
+                }
+                buffer = request_line;
+            } else {
+                // A request httplib built for itself (a digest-auth retry, an
+                // internally followed redirect). Leave it alone.
+                ERPL_TRACE_DEBUG("HTTP_WIRE", "Request line is not the one we composed, leaving it untouched");
+            }
+        }
+
+        return duckdb_httplib_openssl::detail::write_headers(stream, headers);
+    };
 }
 
 } // anonymous namespace
@@ -749,6 +816,14 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
 
     // When url_encode=false, the caller is responsible for fully prepared query encoding.
     // We pass the path and query through unchanged to avoid double-encoding or protocol-specific logic here.
+    //
+    // set_url_encode(false) alone is not enough: httplib guards only the path
+    // half with it and re-encodes the query as application/x-www-form-urlencoded
+    // regardless. Pin the request line so the bytes the caller composed are the
+    // bytes that reach the socket. See MakeVerbatimTargetHeaderWriter above.
+    if (!url_encode) {
+        client.set_header_writer(MakeVerbatimTargetHeaderWriter(method.ToString(), path_str));
+    }
 
     auto headers = HttplibHeaders();
 
