@@ -518,9 +518,7 @@ HttpParams::HttpParams()
       force_download(DEFAULT_FORCE_DOWNLOAD),
       keep_alive(DEFAULT_KEEP_ALIVE),
       url_encode(DEFAULT_URL_ENCODE),
-      max_redirects(DEFAULT_MAX_REDIRECTS),
-      enable_server_cert_verification(HttpTlsPolicy::ServerCertVerificationEnabled()),
-      ca_cert_file(HttpTlsPolicy::TrustedCaCertFile())
+      max_redirects(DEFAULT_MAX_REDIRECTS)
 {
 }
 
@@ -1262,7 +1260,11 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
 	// opted out; an explicit CA bundle is honoured either way so that a private CA
 	// can be trusted without weakening verification.
 	{
-		auto ca_cert_file = http_params.ca_cert_file;
+		// Read the policy HERE, per request, not when HttpParams was constructed: a
+		// long-lived client (an ATTACHed catalog, say) is built once and must still see
+		// a CA bundle set afterwards. See erpl-web #138.
+		const bool verify_certificates = HttpTlsPolicy::ServerCertVerificationEnabled();
+		auto ca_cert_file = HttpTlsPolicy::TrustedCaCertFile();
 		if (ca_cert_file.empty()) {
 			ca_cert_file = HttpTlsPolicy::ResolveSystemCaCertFile();
 		}
@@ -1271,8 +1273,8 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
 			ERPL_TRACE_DEBUG("HTTP_TLS", "Using CA bundle: " + ca_cert_file);
 		}
 
-		c->enable_server_certificate_verification(http_params.enable_server_cert_verification);
-		if (!http_params.enable_server_cert_verification) {
+		c->enable_server_certificate_verification(verify_certificates);
+		if (!verify_certificates) {
 			ERPL_TRACE_WARN("HTTP_TLS",
 			                "*** INSECURE *** Sending request to " + scheme_host_and_port +
 			                    " with TLS server certificate verification DISABLED - this connection is not "
