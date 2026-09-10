@@ -942,12 +942,23 @@ duckdb_httplib_openssl::Result HttpRequest::Execute(duckdb_httplib_openssl::Clie
         }
         ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (" + std::to_string(result->body.length()) + " bytes)");
 
-        // Log the actual response body content for debugging
-        if (!result->body.empty()) {
-            const std::string redacted_body = RedactBody(result->body);
-            // Truncate very long responses to avoid overwhelming the logs
-            if (redacted_body.length() > 1000) {
-                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (truncated): " + redacted_body.substr(0, 1000) + "...");
+        // Log the actual response body content for debugging.
+        //
+        // Guarded and truncated BEFORE redacting. RedactBody copies the whole body and
+        // scans it several times, and the result was then cut to 1000 characters and, with
+        // tracing off, thrown away entirely - so a large page paid a full copy and several
+        // linear passes over it on the default path. Measured on a 208 MB page: a 208 MB
+        // copy and ~1.6 GB of scanning, discarded. Only the prefix that can actually be
+        // logged is redacted now.
+        constexpr size_t MAX_TRACED_BODY_CHARS = 1000;
+        if (!result->body.empty() && ErplTracer::Instance().IsEnabled()) {
+            const bool truncated = result->body.length() > MAX_TRACED_BODY_CHARS;
+            const std::string body_prefix = truncated
+                ? result->body.substr(0, MAX_TRACED_BODY_CHARS)
+                : result->body;
+            const std::string redacted_body = RedactBody(body_prefix);
+            if (truncated) {
+                ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body (truncated): " + redacted_body + "...");
             } else {
                 ERPL_TRACE_DEBUG("HTTP_RESPONSE", "Response body: " + redacted_body);
             }
