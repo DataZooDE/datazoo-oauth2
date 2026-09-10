@@ -144,11 +144,13 @@ struct HttpParams {
     bool url_encode;
 	uint64_t max_redirects;
 
-	// TLS policy for this request, seeded from HttpTlsPolicy at construction so
-	// that the ~20 default-constructed HttpParams call sites inherit the secure
-	// default without every one of them needing a ClientContext.
-	bool enable_server_cert_verification;
-	std::string ca_cert_file;
+	// NOTE: the TLS policy is deliberately NOT stored here. It used to be snapshotted
+	// from HttpTlsPolicy in this constructor, which meant a client built before a
+	// setting changed kept the old policy forever - so the documented
+	//   ATTACH ...;  SET erpl_ca_cert_file = '...';  SELECT ...
+	// order silently did nothing, because the catalog's client was already built.
+	// HttpTlsPolicy is consulted when each request's client is created instead.
+	// See erpl-web #138.
 };
 
 // Helper function to check for HTTP redirect status codes
