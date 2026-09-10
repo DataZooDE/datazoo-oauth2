@@ -9,6 +9,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <condition_variable>
+#include <cstdlib>
+#include <filesystem>
+#include <system_error>
 
 #include "duckdb.hpp"
 #include "duckdb/common/exception/http_exception.hpp"
@@ -334,6 +337,112 @@ bool HttpUrl::IsSameOrigin(const HttpUrl& other) const {
 
 // ----------------------------------------------------------------------
 
+namespace {
+
+// Guards the two mutable process-wide TLS policy fields below. Requests are
+// issued from DuckDB worker threads, and the policy can be changed by a SET
+// statement on another thread, so both need synchronisation.
+std::mutex &TlsPolicyMutex()
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+bool &TlsPolicyVerifyFlag()
+{
+    static bool verify = HttpTlsPolicy::DEFAULT_VERIFY_SERVER_CERTIFICATE;
+    return verify;
+}
+
+std::string &TlsPolicyCaCertFile()
+{
+    static std::string ca_cert_file;
+    return ca_cert_file;
+}
+
+} // namespace
+
+bool HttpTlsPolicy::ServerCertVerificationEnabled()
+{
+    std::lock_guard<std::mutex> guard(TlsPolicyMutex());
+    return TlsPolicyVerifyFlag();
+}
+
+void HttpTlsPolicy::SetServerCertVerificationEnabled(bool enabled)
+{
+    {
+        std::lock_guard<std::mutex> guard(TlsPolicyMutex());
+        if (TlsPolicyVerifyFlag() == enabled) {
+            return;
+        }
+        TlsPolicyVerifyFlag() = enabled;
+    }
+
+    if (enabled) {
+        ERPL_TRACE_INFO("HTTP_TLS", "TLS server certificate verification ENABLED (secure default restored)");
+    } else {
+        ERPL_TRACE_WARN("HTTP_TLS",
+                        "*** INSECURE *** TLS server certificate verification has been DISABLED for all HTTPS "
+                        "requests. Every OAuth2 token, credential and data payload sent from this session can be "
+                        "read and modified by an on-path attacker. Prefer setting a trusted CA bundle instead.");
+    }
+}
+
+std::string HttpTlsPolicy::TrustedCaCertFile()
+{
+    std::lock_guard<std::mutex> guard(TlsPolicyMutex());
+    return TlsPolicyCaCertFile();
+}
+
+void HttpTlsPolicy::SetTrustedCaCertFile(const std::string &path)
+{
+    {
+        std::lock_guard<std::mutex> guard(TlsPolicyMutex());
+        TlsPolicyCaCertFile() = path;
+    }
+    if (path.empty()) {
+        ERPL_TRACE_INFO("HTTP_TLS", "Trusted CA bundle cleared, falling back to the platform trust store");
+    } else {
+        ERPL_TRACE_INFO("HTTP_TLS", "Trusted CA bundle set to: " + path);
+    }
+}
+
+std::string HttpTlsPolicy::ResolveSystemCaCertFile()
+{
+#ifdef _WIN32
+    // httplib loads the Windows certificate store itself.
+    return std::string();
+#else
+    // A statically linked, vcpkg-built OpenSSL frequently carries an OPENSSLDIR
+    // that does not exist on the target machine, so SSL_CTX_set_default_verify_paths()
+    // silently yields an empty trust store and every handshake fails. Probe the
+    // usual distribution locations before we get there.
+    if (const char *env_file = std::getenv("SSL_CERT_FILE")) {
+        if (env_file[0] != '\0') {
+            return std::string(env_file);
+        }
+    }
+
+    static const char *const CANDIDATE_BUNDLES[] = {
+        "/etc/ssl/certs/ca-certificates.crt",   // Debian, Ubuntu, Alpine, Arch
+        "/etc/pki/tls/certs/ca-bundle.crt",     // RHEL, Fedora, CentOS
+        "/etc/ssl/ca-bundle.pem",               // openSUSE
+        "/etc/pki/tls/cacert.pem",              // older RHEL
+        "/etc/ssl/cert.pem",                    // macOS, FreeBSD, Alpine
+    };
+
+    std::error_code ec;
+    for (const auto *candidate : CANDIDATE_BUNDLES) {
+        if (std::filesystem::exists(candidate, ec) && !ec) {
+            return std::string(candidate);
+        }
+    }
+    return std::string();
+#endif
+}
+
+// ----------------------------------------------------------------------
+
 HttpParams::HttpParams()
     : timeout(DEFAULT_TIMEOUT),
       retries(DEFAULT_RETRIES),
@@ -342,7 +451,9 @@ HttpParams::HttpParams()
       force_download(DEFAULT_FORCE_DOWNLOAD),
       keep_alive(DEFAULT_KEEP_ALIVE),
       url_encode(DEFAULT_URL_ENCODE),
-      max_redirects(DEFAULT_MAX_REDIRECTS)
+      max_redirects(DEFAULT_MAX_REDIRECTS),
+      enable_server_cert_verification(HttpTlsPolicy::ServerCertVerificationEnabled()),
+      ca_cert_file(HttpTlsPolicy::TrustedCaCertFile())
 {
 }
 
@@ -1071,7 +1182,29 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
     // We handle redirects manually to preserve auth headers on same-domain redirects
     c->set_follow_location(false);
 	c->set_keep_alive(http_params.keep_alive);
-	c->enable_server_certificate_verification(false);
+
+	// TLS trust. Verification is on unless the embedding extension has explicitly
+	// opted out; an explicit CA bundle is honoured either way so that a private CA
+	// can be trusted without weakening verification.
+	{
+		auto ca_cert_file = http_params.ca_cert_file;
+		if (ca_cert_file.empty()) {
+			ca_cert_file = HttpTlsPolicy::ResolveSystemCaCertFile();
+		}
+		if (!ca_cert_file.empty()) {
+			c->set_ca_cert_path(ca_cert_file.c_str());
+			ERPL_TRACE_DEBUG("HTTP_TLS", "Using CA bundle: " + ca_cert_file);
+		}
+
+		c->enable_server_certificate_verification(http_params.enable_server_cert_verification);
+		if (!http_params.enable_server_cert_verification) {
+			ERPL_TRACE_WARN("HTTP_TLS",
+			                "*** INSECURE *** Sending request to " + scheme_host_and_port +
+			                    " with TLS server certificate verification DISABLED - this connection is not "
+			                    "authenticated and can be intercepted.");
+		}
+	}
+
 	// Interpret timeout as a single max-time budget in milliseconds and
 	// apply consistently to all per-operation timeouts.
 	{
