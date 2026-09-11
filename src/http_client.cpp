@@ -56,6 +56,13 @@ static const std::unordered_set<std::string> kSensitiveHeaders = {
     "x-auth-token", "x-api-key", "x-access-token"
 };
 
+// Whether a header carries caller identity. Deliberately the same set the trace redactor
+// uses: a header whose value must never be written to a log is exactly a header whose value
+// must never be ignored when deciding whether two requests are the same request.
+static bool IsCredentialHeaderName(const std::string &name) {
+    return kSensitiveHeaders.count(ToLower(name)) > 0;
+}
+
 // Returns a safe-to-log header value. For Authorization/Proxy-Authorization the scheme
 // prefix ("Bearer ", "Basic ") is preserved so the auth type remains visible.
 static std::string RedactHeaderValue(const std::string &name, const std::string &value) {
@@ -796,12 +803,41 @@ void HttpRequest::AddODataVersionHeaders()
     }
 }
 
+bool HttpRequest::CarriesCredentials() const
+{
+    for (const auto &header : headers) {
+        if (IsCredentialHeaderName(header.first) && !header.second.empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 std::string HttpRequest::ToCacheKey() const
 {
     auto content_hasher = std::hash<std::string>();
 
     auto strstream = std::stringstream();
     strstream << method.ToString() << ":" << url.ToString() << ":" << content_hasher(content);
+
+    // Credentials are part of a response's identity. Without them, two callers holding
+    // different secrets for the same URL collide in a process-wide cache and the second is
+    // served the first one's rows. Hashed rather than concatenated so a cache key can never
+    // become a place a token is written out. See the note on CarriesCredentials below: a
+    // credentialed response is also not stored at all, so this is defence in depth for
+    // callers that use ToCacheKey or IsInCache directly.
+    std::string credential_material;
+    for (const auto &header : headers) {
+        if (IsCredentialHeaderName(header.first)) {
+            credential_material += header.first;
+            credential_material += '\0';
+            credential_material += header.second;
+            credential_material += '\n';
+        }
+    }
+    if (!credential_material.empty()) {
+        strstream << ":" << content_hasher(credential_material);
+    }
 
     return strstream.str();
 }
@@ -1455,17 +1491,26 @@ std::unique_ptr<HttpResponse> CachingHttpClient::Get(const std::string& url) {
 std::unique_ptr<HttpResponse> CachingHttpClient::SendRequest(HttpRequest& request) {
     auto& cache = HttpCache::GetInstance();
 
-    // Try to get from cache first
-    auto cached_response = cache.GetCachedResponse(request);
-    if (cached_response) {
-        return cached_response;
+    // A credentialed response never enters this cache, in either direction. The cache is a
+    // process-wide singleton with a 30s TTL, so anything stored in it outlives the caller
+    // and is reachable by every other caller in the process. Keying credentials in (see
+    // ToCacheKey) stops the collision; not storing the response stops the data being there
+    // to serve in the first place, which is the guarantee worth having for a bearer token
+    // or a basic credential.
+    const bool carries_credentials = request.CarriesCredentials();
+
+    if (!carries_credentials) {
+        auto cached_response = cache.GetCachedResponse(request);
+        if (cached_response) {
+            return cached_response;
+        }
     }
 
     // If not in cache, forward to wrapped client
     auto response = http_client->SendRequest(request);
 
     // Cache the response if successful
-    if (response && response->Code() >= 200 && response->Code() < 300) {
+    if (!carries_credentials && response && response->Code() >= 200 && response->Code() < 300) {
         cache.EmplaceCacheResponse(request, std::make_unique<HttpResponse>(*response), cache_duration);
     }
 
