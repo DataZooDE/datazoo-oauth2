@@ -10,6 +10,10 @@
 #endif
 
 #include <chrono>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <string>
 #include <filesystem>
 #include <optional>
 #include "duckdb.hpp"
@@ -316,8 +320,26 @@ public:
     std::unique_ptr<HttpResponse> Get(const std::string &url);
 
     std::unique_ptr<HttpResponse> SendRequest(HttpRequest &request);
+    // Number of origins this client currently holds a connection for. Test-visible so the
+    // pooling can be asserted without inspecting sockets.
+    std::size_t PooledOriginCount() const;
+
 private:
     HttpParams http_params;
+
+    // One httplib client per scheme://host:port, reused across requests.
+    //
+    // A client was previously constructed per attempt INSIDE the retry loop, so
+    // CreateHttplibClient's set_keep_alive was applied to an object destroyed microseconds
+    // later and every page of a scan paid a fresh TLS handshake - 100-300ms on a WAN link
+    // against roughly 25ms to transfer a page. See GitHub erpl-web#157.
+    //
+    // httplib's Client owns one socket and is not safe for concurrent requests, so the
+    // mutex is held for the whole exchange. An HttpClient belongs to one scan, whose paging
+    // is sequential, so in the normal case it is uncontended; two threads sharing one
+    // HttpClient would be sharing a socket either way and must serialise.
+    mutable std::mutex client_pool_mutex;
+    std::map<std::string, std::unique_ptr<duckdb_httplib_openssl::Client>> client_pool;
 
 private:
     std::unique_ptr<duckdb_httplib_openssl::Client> CreateHttplibClient(const HttpParams &http_params,

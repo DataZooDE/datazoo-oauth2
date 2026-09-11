@@ -1178,12 +1178,26 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
         try {
             // Use the configured HTTP parameters rather than default-constructing new ones
             auto params = this->http_params;
-            auto client = CreateHttplibClient(params, request.url.ToSchemeHostAndPort());
-            auto res = request.Execute(*client, params.url_encode);
+            const auto origin = request.url.ToSchemeHostAndPort();
+
+            // Reuse the connection to this origin. httplib's Client owns one socket and
+            // cannot serve two requests at once, so the lock spans the whole exchange.
+            std::lock_guard<std::mutex> pool_guard(client_pool_mutex);
+            auto pooled = client_pool.find(origin);
+            if (pooled == client_pool.end()) {
+                pooled = client_pool.emplace(origin, CreateHttplibClient(params, origin)).first;
+            }
+
+            auto res = request.Execute(*pooled->second, params.url_encode);
             err = res.error();
             if (err == duckdb_httplib_openssl::Error::Success) {
                     status = res->status;
                     response = res.value();
+            } else {
+                    // A dead connection cannot be revived by retrying on the same socket:
+                    // drop it so the next attempt dials afresh. This is what makes the
+                    // retry loop still work once connections are kept.
+                    client_pool.erase(pooled);
             }
         } catch (IOException &e) {
 			caught_e = std::current_exception();
@@ -1281,6 +1295,12 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
         }
     }
     return nullptr;
+}
+
+std::size_t HttpClient::PooledOriginCount() const
+{
+    std::lock_guard<std::mutex> pool_guard(client_pool_mutex);
+    return client_pool.size();
 }
 
 uint64_t HttpClient::CalculateSleepTime(idx_t n_tries)
