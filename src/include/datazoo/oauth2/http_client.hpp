@@ -244,6 +244,11 @@ public:
 
     std::string ToCacheKey() const;
 
+    // True when the request carries caller identity (Authorization, Cookie, API-key style
+    // headers). A response fetched under credentials is not shared through the process-wide
+    // response cache.
+    bool CarriesCredentials() const;
+
 public:
     HttpMethod method;
     HttpUrl url;
