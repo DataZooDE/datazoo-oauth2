@@ -50,10 +50,17 @@ std::string ToHexDump(const std::string& data, size_t max_bytes = 500) {
     return hex.str();
 }
 
-// Headers whose values must never appear verbatim in trace logs
+// The single list of headers that carry caller identity.
+//
+// Three things depend on this: values must never be written to a trace, must never be
+// ignored when deciding whether two requests are the same request (the response cache
+// key), and must never survive a redirect to another origin. Those three used to keep
+// their own lists, which drifted - the redirect strip named five where this named seven,
+// so X-Access-Token was carried to whatever host a Location header pointed at.
 static const std::unordered_set<std::string> kSensitiveHeaders = {
     "authorization", "proxy-authorization", "set-cookie", "cookie",
-    "x-auth-token", "x-api-key", "x-access-token"
+    "x-auth-token", "x-api-key", "x-access-token", "x-csrf-token",
+    "apikey", "ocp-apim-subscription-key"
 };
 
 // Whether a header carries caller identity. Deliberately the same set the trace redactor
@@ -1219,15 +1226,15 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
                     // If cross-origin, clear all sensitive headers for security
                     // This prevents credential leakage on HTTPS→HTTP downgrades, port changes, or host changes
                     if (!same_origin) {
-                        static const std::vector<std::string> sensitive_headers = {
-                            "Authorization",
-                            "Cookie",
-                            "Proxy-Authorization",
-                            "X-API-Key",
-                            "X-Auth-Token"
-                        };
-                        for (const auto& header : sensitive_headers) {
-                            request.headers.erase(header);
+                        // Erase by predicate over the one list, not a second hand-written
+                        // copy of it: header names arrive in whatever case the caller used,
+                        // and a name present here but missing there is a credential leak.
+                        for (auto it = request.headers.begin(); it != request.headers.end();) {
+                            if (IsCredentialHeaderName(it->first)) {
+                                it = request.headers.erase(it);
+                            } else {
+                                ++it;
+                            }
                         }
                         ERPL_TRACE_DEBUG("HTTP_CLIENT", "Cross-origin redirect - removed sensitive headers");
                     }
