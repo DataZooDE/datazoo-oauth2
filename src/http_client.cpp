@@ -409,6 +409,41 @@ std::string HttpUrl::Fragment() const { return fragment; }
 std::string HttpUrl::Username() const { return username; }
 std::string HttpUrl::Password() const { return password; }
 
+namespace {
+
+// A URL is untrusted input by the time it reaches an error message: writing it out raw
+// would let a control character in a Location header reach a log or a terminal intact.
+// Non-printables become '?', and the whole thing is capped.
+std::string SummariseUrlForMessage(const std::string& url) {
+    constexpr std::size_t MAX_LENGTH = 120;
+    std::string summary;
+    for (const char c : url.substr(0, MAX_LENGTH)) {
+        summary.push_back((static_cast<unsigned char>(c) < 0x20 || c == 0x7f) ? '?' : c);
+    }
+    if (url.size() > MAX_LENGTH) {
+        summary += "...";
+    }
+    return summary;
+}
+
+}  // namespace
+
+bool HttpUrl::IsWireSafeTarget() const {
+    // The bytes that actually go into the request line: scheme, host and port (which a
+    // proxy puts there in absolute form, and which reaches the Host header regardless),
+    // plus the path and query. The fragment never leaves the client, so it is not included.
+    const std::string target = ToSchemeHostAndPort() + ToPathQuery();
+
+    // A control character splits the request line; a raw space ends the target early. A URL
+    // arriving in a Location header is service-supplied and has no legitimate reason to
+    // carry either, so both are refused. (A caller's own URL is held to the looser
+    // control-characters-only rule elsewhere, where a space is more likely a typo than an
+    // attack.)
+    return std::none_of(target.begin(), target.end(), [](unsigned char c) {
+        return c < 0x20 || c == 0x7f || c == ' ';
+    });
+}
+
 bool HttpUrl::IsSameOrigin(const HttpUrl& other) const {
     // Get effective port (default 443 for https, 80 for http)
     auto effective_port = [](const std::string& url_scheme, const std::string& url_port) -> std::string {
@@ -1214,7 +1249,27 @@ std::unique_ptr<HttpResponse> HttpClient::SendRequest(HttpRequest &request)
                     // Resolve relative URLs against the current request URL
                     HttpUrl new_url = HttpUrl::MergeWithBaseUrlIfRelative(request.url, redirect_url);
 
-                    // Check if same origin (scheme + host + port) - preserve auth headers only for same origin
+                    // Two independent questions about a Location the service chose, and the
+                    // answer to one says nothing about the other.
+                    //
+                    // Can it be SENT? A Location of "https://<same-host>/x\r\nX-Injected: 1"
+                    // keeps its host and so passes the origin check below, but httplib writes
+                    // the target verbatim and HttpUrl's parser matches CR and LF inside the
+                    // path and query - so following it would put an attacker's header into
+                    // the request, with credentials still attached. Refuse rather than strip:
+                    // a Location we cannot send intact is not one whose intent we can guess,
+                    // and every other seam in the caller (GraphClient::GetServerSuppliedUrl,
+                    // ODataClient::Get, the ODP next/delta followers) already refuses.
+                    if (!new_url.IsWireSafeTarget()) {
+                        throw IOException(
+                            "Refusing to follow a redirect to a URL that cannot be sent intact: '" +
+                            SummariseUrlForMessage(new_url.ToString()) +
+                            "'. The Location header contained a control character or a raw space.");
+                    }
+
+                    // May CREDENTIALS survive the hop? Only on the same origin (scheme, host
+                    // and port), which is what stops an HTTPS->HTTP downgrade or a host change
+                    // from carrying the caller's token along.
                     bool same_origin = request.url.IsSameOrigin(new_url);
 
                     ERPL_TRACE_DEBUG("HTTP_CLIENT", "Following redirect " + std::to_string(redirect_count + 1) +

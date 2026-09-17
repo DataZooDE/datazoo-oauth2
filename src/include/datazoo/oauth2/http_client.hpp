@@ -76,6 +76,18 @@ public:
 
     bool IsSameOrigin(const HttpUrl& other) const;
 
+    // True when this URL can be put in a request line as-is.
+    //
+    // httplib writes the request target verbatim, and HttpUrl's parser matches CR and LF
+    // inside the path and query, so a URL carrying either splits the request line into two
+    // -- the second half being whatever the sender chose, including headers. A raw space
+    // ends the target just as effectively.
+    //
+    // This is the sendability half of the redirect decision. IsSameOrigin is the other half
+    // and answers a different question: whether credentials may survive the hop. A Location
+    // header can keep the host, pass the origin check, and still be unsendable.
+    bool IsWireSafeTarget() const;
+
 private:
     std::string scheme;
     std::string host;
