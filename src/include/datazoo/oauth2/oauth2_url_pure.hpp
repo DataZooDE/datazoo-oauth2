@@ -1,6 +1,7 @@
 #pragma once
 
 #include "datazoo/oauth2/oauth2_types.hpp"
+#include <cstddef>
 #include <string>
 
 namespace erpl_web {
@@ -27,5 +28,36 @@ std::string UrlEncode(const std::string &value);
 // Google's access_type=offline&prompt=consent requirement, S-0.13).
 std::string BuildAuthorizationUrlPure(const OAuth2Config &config, const std::string &code_challenge,
                                        const std::string &state);
+
+
+// ---------------------------------------------------------------------------
+// Security primitives for the authorization_code flow.
+//
+// Here, in the pure-logic translation unit, because this is the only part of the library
+// the standalone Catch2 target compiles - and these two are exactly the things that need
+// covering. See DataZooDE/erpl-web#248.
+
+// Cryptographically secure random, base64url-encoded, unpadded.
+//
+// The PKCE code_verifier and the CSRF state both come from here. They were drawn from
+// std::mt19937 seeded with one 32-bit std::random_device value, which fails twice: mt19937
+// is not a CSPRNG, so one output reveals the state and the next value, and a <=2^32 seed
+// space is brute-forceable anyway. Predicting either defeats the protection it exists for.
+//
+// Throws if the system CSPRNG is unavailable rather than falling back to anything weaker:
+// a caller cannot distinguish a weak token from a strong one.
+//
+// The output alphabet is RFC 7636's unreserved set, so the result is a valid code_verifier
+// as-is. Encoding raw bytes also avoids the modulo bias that indexing a 66-character
+// charset with uniform_int_distribution carried.
+std::string GenerateSecureRandomToken(std::size_t num_bytes);
+
+// Escapes text for interpolation into HTML.
+//
+// The loopback callback server's error page wrote the `error` and `error_description` query
+// parameters into its markup raw - on the origin that RECEIVES AUTHORIZATION CODES. While
+// the flow waits, any page the browser visits can navigate to
+// http://localhost:<port>/?error=<img src=x onerror=...> and run script in that origin.
+std::string EscapeHtmlText(const std::string &text);
 
 } // namespace erpl_web

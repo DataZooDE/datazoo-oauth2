@@ -1,4 +1,5 @@
 #include "datazoo/oauth2/oauth2_server.hpp"
+#include "datazoo/oauth2/oauth2_url_pure.hpp"
 #include "datazoo/oauth2/oauth2_callback_handler.hpp"
 #include "datazoo/oauth2/tracing.hpp"
 #include <stdexcept>
@@ -19,6 +20,9 @@
 #include "httplib.hpp"
 
 namespace erpl_web {
+
+
+
 
 OAuth2Server::OAuth2Server(int port) : port_(port) {
     callback_handler_ = std::make_unique<OAuth2CallbackHandler>();
@@ -171,8 +175,10 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
                 "<div class='error-icon'>❌</div>"
                 "<h1>Authorization Failed</h1>"
                 "<div class='error-details'>"
-                "<p><span class='error-label'>Error:</span> " + error + "</p>"
-                "<p><span class='error-label'>Description:</span> " + error_description + "</p>"
+                // Escaped: these are attacker-controllable query parameters being written
+                // into a page served on the origin that receives authorization codes.
+                "<p><span class='error-label'>Error:</span> " + EscapeHtmlText(error) + "</p>"
+                "<p><span class='error-label'>Description:</span> " + EscapeHtmlText(error_description) + "</p>"
                 "</div>"
                 "<p>Please try again or contact your system administrator.</p>"
                 "<button class='close-btn' onclick='window.close()'>Close Window</button>"
