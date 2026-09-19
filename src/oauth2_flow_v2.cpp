@@ -7,6 +7,7 @@
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <openssl/rand.h>
 #include <openssl/sha.h>
 #include <openssl/evp.h>
 #include <chrono>
@@ -15,7 +16,9 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <cstddef>
 #include <string>
+#include <vector>
 #include <condition_variable>
 #include <memory>
 #include <sstream>
@@ -30,6 +33,10 @@ namespace erpl_web {
 // declared in oauth2_url_pure.hpp. See docs/EXTRACTION_NOTES.md (S-0.13).
 std::string BuildAuthorizationUrlPure(const OAuth2Config &config, const std::string &code_challenge,
                                        const std::string &state);
+
+// Same reason: forward-declared rather than included. Both live in oauth2_url_pure so the
+// standalone Catch2 target can cover them - it compiles only the pure sources.
+std::string GenerateSecureRandomToken(std::size_t num_bytes);
 
 // Minimal URL encoder for query/form values
 static std::string UrlEncode(const std::string &value) {
@@ -297,23 +304,13 @@ OAuth2Tokens OAuth2FlowV2::ParseTokenResponse(const std::string& response_conten
     }
 }
 
+
 std::string OAuth2FlowV2::GenerateCodeVerifier() {
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generating code verifier");
 
-    // Use RFC 7636 compliant character set and length
-    const std::string charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-    const int length = 64; // Use 64 characters for better compatibility
-
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_int_distribution<int> distribution(0, static_cast<int>(charset.length() - 1));
-
-    std::string code_verifier;
-    code_verifier.reserve(length);
-
-    for (int i = 0; i < length; ++i) {
-        code_verifier += charset[distribution(generator)];
-    }
+    // 48 random bytes -> 64 base64url characters, the same length as before and within
+    // RFC 7636's 43-128 range, over its unreserved alphabet.
+    auto code_verifier = GenerateSecureRandomToken(48);
 
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated PKCE code verifier");
     return code_verifier;
@@ -365,21 +362,14 @@ std::string OAuth2FlowV2::GenerateCodeChallenge(const std::string& code_verifier
 std::string OAuth2FlowV2::GenerateState() {
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generating state parameter");
 
-    const std::string charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    const int length = 32;
+    // 24 random bytes -> 32 base64url characters. The state is the CSRF defence for the
+    // callback, so it needs the same source as the verifier.
+    auto state = GenerateSecureRandomToken(24);
 
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_int_distribution<int> distribution(0, static_cast<int>(charset.length() - 1));
-
-    std::string state;
-    state.reserve(length);
-
-    for (int i = 0; i < length; ++i) {
-        state += charset[distribution(generator)];
-    }
-
-    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated state: " + state);
+    // The value itself is not traced. It travels in the authorization URL, so it is not a
+    // long-lived secret - but it is the token the callback is validated against, and writing
+    // it into a trace file on disk serves no purpose.
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated state parameter");
     return state;
 }
 

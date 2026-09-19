@@ -1,4 +1,5 @@
 #include "datazoo/oauth2/oauth2_types.hpp"
+#include "datazoo/oauth2/oauth2_url_pure.hpp"
 #include <chrono>
 #include <sstream>
 #include <random>
@@ -94,19 +95,17 @@ void OAuth2Tokens::CalculateExpiresAfter() {
 namespace OAuth2Utils {
 
 std::string GenerateCodeVerifier() {
-    static const std::string charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_int_distribution<int> distribution(0, charset.length() - 1);
-
-    std::string result;
-    result.reserve(128);
-
-    for (size_t i = 0; i < 128; ++i) {
-        result += charset[distribution(generator)];
-    }
-
-    return result;
+    // A SECOND copy of this function existed alongside OAuth2FlowV2's, with the same
+    // mt19937 defect, in a different file - and a review that found the other one did not
+    // find this. Both now come from the same CSPRNG-backed generator.
+    //
+    // Nothing in this library calls these two today; they are public API, so a consumer
+    // could, and would have received predictable security tokens. See
+    // DataZooDE/datazoo-oauth2#10.
+    //
+    // 96 random bytes -> 128 base64url characters, the length this produced before and the
+    // maximum RFC 7636 permits.
+    return GenerateSecureRandomToken(96);
 }
 
 std::string GenerateCodeChallenge(const std::string& code_verifier) {
@@ -172,19 +171,8 @@ std::string GenerateCodeChallengeS256(const std::string& code_verifier) {
 }
 
 std::string GenerateState() {
-    static const std::string charset = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    std::random_device rd;
-    std::mt19937 generator(rd());
-    std::uniform_int_distribution<int> distribution(0, charset.length() - 1);
-
-    std::string result;
-    result.reserve(32);
-
-    for (size_t i = 0; i < 32; ++i) {
-        result += charset[distribution(generator)];
-    }
-
-    return result;
+    // Same as GenerateCodeVerifier above: the sibling copy of OAuth2FlowV2::GenerateState.
+    return GenerateSecureRandomToken(24);
 }
 
 bool ValidateState(const std::string& received_state, const std::string& expected_state) {

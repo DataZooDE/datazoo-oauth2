@@ -1,4 +1,7 @@
 #include "datazoo/oauth2/oauth2_url_pure.hpp"
+#include <vector>
+#include <stdexcept>
+#include <openssl/rand.h>
 #include <sstream>
 #include <iomanip>
 
@@ -46,6 +49,54 @@ std::string BuildAuthorizationUrlPure(const OAuth2Config &config, const std::str
     }
 
     return auth_url.str();
+}
+
+
+std::string GenerateSecureRandomToken(std::size_t num_bytes) {
+    std::vector<unsigned char> buffer(num_bytes);
+    if (RAND_bytes(buffer.data(), static_cast<int>(buffer.size())) != 1) {
+        throw std::runtime_error(
+            "Could not obtain cryptographically secure random bytes for an OAuth2 security "
+            "token (RAND_bytes failed). Refusing to continue with a predictable value.");
+    }
+
+    static const char *const ALPHABET =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    std::string encoded;
+    encoded.reserve(((num_bytes + 2) / 3) * 4);
+    for (std::size_t i = 0; i < buffer.size(); i += 3) {
+        const unsigned int byte0 = buffer[i];
+        const unsigned int byte1 = (i + 1 < buffer.size()) ? buffer[i + 1] : 0u;
+        const unsigned int byte2 = (i + 2 < buffer.size()) ? buffer[i + 2] : 0u;
+        const unsigned int triple = (byte0 << 16) | (byte1 << 8) | byte2;
+
+        encoded += ALPHABET[(triple >> 18) & 0x3F];
+        encoded += ALPHABET[(triple >> 12) & 0x3F];
+        if (i + 1 < buffer.size()) {
+            encoded += ALPHABET[(triple >> 6) & 0x3F];
+        }
+        if (i + 2 < buffer.size()) {
+            encoded += ALPHABET[triple & 0x3F];
+        }
+    }
+    return encoded;
+}
+
+std::string EscapeHtmlText(const std::string &text) {
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (const char c : text) {
+        switch (c) {
+        case '&':  escaped += "&amp;";  break;
+        case '<':  escaped += "&lt;";   break;
+        case '>':  escaped += "&gt;";   break;
+        case '"':  escaped += "&quot;"; break;
+        case '\'': escaped += "&#39;";  break;
+        default:   escaped += c;        break;
+        }
+    }
+    return escaped;
 }
 
 } // namespace erpl_web
