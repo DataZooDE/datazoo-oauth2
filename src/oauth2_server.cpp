@@ -278,7 +278,14 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
         return callback_handler_->GetReceivedCode();
     }
 
-    throw std::runtime_error("Timeout waiting for OAuth2 callback");
+    // Names the things worth checking. "Timeout waiting for OAuth2 callback" on its own sent
+    // people looking at the network when the usual cause is that nothing ever opened the
+    // authorization URL - see DataZooDE/datazoo-oauth2#11.
+    throw std::runtime_error(
+        "Timeout waiting for OAuth2 callback: no redirect reached the local listener. Either "
+        "the authorization URL was never opened (on a headless session nothing can open it - "
+        "the URL is printed above for you to open yourself), or the redirect could not reach "
+        "this machine's callback port.");
 }
 
 } // namespace erpl_web

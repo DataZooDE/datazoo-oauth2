@@ -6,8 +6,21 @@ namespace erpl_web {
 // Browser helper for opening URLs (cross-platform)
 class OAuth2Browser {
 public:
-    // Open URL in default browser
+    // Open URL in default browser. Throws when the browser could not be launched.
     static void OpenUrl(const std::string& url);
+
+    // Whether a browser could plausibly be opened at all.
+    //
+    // On a headless Linux session there is nothing to open: xdg-open reports
+    // "no method available" and exits non-zero. That used to go unnoticed - OpenUrlLinux
+    // forked, called execlp, and then waitpid'd with WNOHANG, so the child's failure was
+    // never observed - and the flow went on to wait the full callback timeout for a
+    // redirect that could not arrive, finally reporting "Timeout waiting for OAuth2
+    // callback". Which named neither the real cause nor anything the user could act on.
+    //
+    // Checked BEFORE attempting, so the doomed xdg-open is not run and its stderr does not
+    // land in the user's output either. See DataZooDE/datazoo-oauth2#11.
+    static bool CanOpenBrowser();
 
     // Find available port for local server
     static int FindAvailablePort(int start_port = 65000);

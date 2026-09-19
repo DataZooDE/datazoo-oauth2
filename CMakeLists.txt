@@ -127,6 +127,14 @@ endif()
 if(NOT DATAZOO_OAUTH2_HAS_PARENT)
 find_package(Catch2 3 CONFIG QUIET)
 if(Catch2_FOUND)
+    # NOTE for anyone adding a test here: this target is built on Windows and macOS in CI,
+    # not only on Linux, and the sources are globbed - so a new file is compiled everywhere
+    # whether or not its test cases run anywhere. POSIX-only APIs therefore break the build
+    # for everyone: setenv/unsetenv, getpid, <unistd.h>, fork. MSVC has none of them.
+    #
+    # Guard the WHOLE body of a platform-specific file, helpers included. A helper sitting
+    # outside the guard still has to compile even when every test using it is excluded, which
+    # is exactly how the Windows leg broke once already.
     file(GLOB DATAZOO_OAUTH2_TEST_SOURCES CONFIGURE_DEPENDS test/test_*.cpp)
     if(DATAZOO_OAUTH2_TEST_SOURCES)
         add_executable(datazoo_oauth2_unit_tests

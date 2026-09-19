@@ -25,7 +25,13 @@ private:
     std::string GenerateState();
     std::string BuildAuthorizationUrl(const OAuth2Config& config, const std::string& code_challenge, const std::string& state);
     void OpenBrowser(const std::string& url);
-    void DisplayOAuth2Instructions(const std::string& auth_url);
+    // `browser_will_open` decides between "a browser will open" and "open this yourself".
+    // Promising an automatic open on a headless session and then reporting that it could not
+    // happen is worse than saying so once, up front.
+    void DisplayOAuth2Instructions(const std::string& auth_url, bool browser_will_open);
+
+    // Prints, on the console, why no browser opened and what to do instead.
+    static void ExplainManualAuthorizationStep(const std::string& url, const std::string& reason);
 
     std::unique_ptr<OAuth2Server> server_;
     std::unique_ptr<TimeoutHttpClient> http_client_;

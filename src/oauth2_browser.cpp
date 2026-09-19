@@ -1,4 +1,6 @@
 #include "datazoo/oauth2/oauth2_browser.hpp"
+#include <thread>
+#include <chrono>
 #include <cstdlib>
 #include <stdexcept>
 
@@ -83,6 +85,44 @@ void OAuth2Browser::OpenUrlMacOS(const std::string& url) {
 #endif
 }
 
+bool OAuth2Browser::CanOpenBrowser() {
+#if defined(_WIN32) || defined(__APPLE__)
+    // Both platforms have a documented system opener that works without a display server
+    // being separately advertised.
+    return true;
+#else
+    // Linux: a graphical session has to be reachable, and the opener has to exist.
+    const char *display = std::getenv("DISPLAY");
+    const char *wayland = std::getenv("WAYLAND_DISPLAY");
+    const bool has_session = (display != nullptr && *display != '\0') ||
+                             (wayland != nullptr && *wayland != '\0');
+    if (!has_session) {
+        return false;
+    }
+
+    // xdg-open on PATH. Checked rather than assumed: a minimal container has a DISPLAY
+    // forwarded and no xdg-utils installed.
+    const char *path_env = std::getenv("PATH");
+    if (path_env == nullptr) {
+        return false;
+    }
+    std::string path(path_env);
+    std::size_t start = 0;
+    while (start <= path.size()) {
+        const auto end = path.find(':', start);
+        const auto dir = path.substr(start, (end == std::string::npos) ? std::string::npos : end - start);
+        if (!dir.empty() && ::access((dir + "/xdg-open").c_str(), X_OK) == 0) {
+            return true;
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+    return false;
+#endif
+}
+
 void OAuth2Browser::OpenUrlLinux(const std::string& url) {
 #ifndef _WIN32
 #ifndef __APPLE__
@@ -90,13 +130,38 @@ void OAuth2Browser::OpenUrlLinux(const std::string& url) {
     if (pid == 0) {
         // Child process
         execlp("xdg-open", "xdg-open", url.c_str(), NULL);
-        exit(1); // If execlp fails
-    } else if (pid > 0) {
-        // Parent process - wait for child to start
-        int status;
-        waitpid(pid, &status, WNOHANG);
-    } else {
+        _exit(127); // If execlp fails - _exit, not exit: no duplicate atexit handlers
+    }
+    if (pid < 0) {
         throw std::runtime_error("Failed to fork process for opening browser");
+    }
+
+    // The child's outcome is actually observed now. It used to be waitpid'd with WNOHANG
+    // and the status discarded, so xdg-open exiting non-zero - which is what happens on a
+    // headless session - looked exactly like success.
+    //
+    // Polled rather than blocked outright: xdg-open normally returns as soon as it has
+    // handed the URL off, but an implementation that stays alive for the browser's lifetime
+    // must not hang this call. Still running after the grace period means it launched
+    // something, which is the answer we want.
+    constexpr int POLL_INTERVAL_MS = 50;
+    constexpr int GRACE_PERIOD_MS = 2000;
+    for (int waited = 0; waited < GRACE_PERIOD_MS; waited += POLL_INTERVAL_MS) {
+        int status = 0;
+        const pid_t finished = waitpid(pid, &status, WNOHANG);
+        if (finished == pid) {
+            if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                return;  // opened
+            }
+            throw std::runtime_error(
+                "xdg-open could not open the URL (exit status " +
+                std::to_string(WIFEXITED(status) ? WEXITSTATUS(status) : -1) +
+                "). There is usually no browser reachable from this session.");
+        }
+        if (finished < 0) {
+            return;  // cannot tell; do not claim failure
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(POLL_INTERVAL_MS));
     }
 #else
     throw std::runtime_error("Linux-specific browser opening not available on this platform");
