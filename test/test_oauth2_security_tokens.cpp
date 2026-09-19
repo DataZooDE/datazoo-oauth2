@@ -17,7 +17,7 @@ using namespace erpl_web;
 // authorization URL is passed to the browser as a command-line argument, readable from /proc
 // by any local user. A predictable verifier turns an intercepted code into a usable one.
 //
-// See DataZooDE/erpl-web#248.
+// See DataZooDE/datazoo-oauth2#10.
 
 TEST_CASE("a security token has the requested length over the base64url alphabet",
           "[oauth2_security][pkce]") {

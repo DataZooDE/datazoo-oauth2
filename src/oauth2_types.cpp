@@ -101,7 +101,7 @@ std::string GenerateCodeVerifier() {
     //
     // Nothing in this library calls these two today; they are public API, so a consumer
     // could, and would have received predictable security tokens. See
-    // DataZooDE/erpl-web#248.
+    // DataZooDE/datazoo-oauth2#10.
     //
     // 96 random bytes -> 128 base64url characters, the length this produced before and the
     // maximum RFC 7636 permits.

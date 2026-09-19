@@ -35,7 +35,7 @@ std::string BuildAuthorizationUrlPure(const OAuth2Config &config, const std::str
 //
 // Here, in the pure-logic translation unit, because this is the only part of the library
 // the standalone Catch2 target compiles - and these two are exactly the things that need
-// covering. See DataZooDE/erpl-web#248.
+// covering. See DataZooDE/datazoo-oauth2#10.
 
 // Cryptographically secure random, base64url-encoded, unpadded.
 //
