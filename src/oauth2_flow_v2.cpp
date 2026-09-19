@@ -107,10 +107,20 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     // Open browser for user authorization
     ERPL_TRACE_INFO("OAUTH2_FLOW", "Opening browser for authorization");
 
-    // Display user-friendly console output
-    DisplayOAuth2Instructions(auth_url);
+    // Asked once, so the instructions and the opener cannot disagree.
+    const bool browser_available = OAuth2Browser::CanOpenBrowser();
 
-    OpenBrowser(auth_url);
+    // Display user-friendly console output
+    DisplayOAuth2Instructions(auth_url, browser_available);
+
+    if (browser_available) {
+        OpenBrowser(auth_url);
+    } else {
+        ERPL_TRACE_WARN("OAUTH2_FLOW", "No browser is reachable from this session");
+        ExplainManualAuthorizationStep(
+            auth_url, "no graphical session was detected (DISPLAY and WAYLAND_DISPLAY are "
+                      "unset, or xdg-open is not installed)");
+    }
 
     // Wait for authorization code with timeout
     ERPL_TRACE_INFO("OAUTH2_FLOW", "Waiting for authorization code");
@@ -390,15 +400,20 @@ std::string OAuth2FlowV2::BuildAuthorizationUrl(
     return url;
 }
 
-void OAuth2FlowV2::DisplayOAuth2Instructions(const std::string& auth_url) {
+void OAuth2FlowV2::DisplayOAuth2Instructions(const std::string& auth_url, bool browser_will_open) {
     std::cout << "\n";
     std::cout << "🔐  OAuth2 Authentication Required  🔐\n";
     std::cout << "=====================================\n\n";
 
     std::cout << "📋 To complete the authentication:\n\n";
 
-    std::cout << "1️⃣ A browser window should open automatically\n";
-    std::cout << "2️⃣ If it doesn't open, manually copy and paste this URL:\n\n";
+    if (browser_will_open) {
+        std::cout << "1️⃣ A browser window should open automatically\n";
+        std::cout << "2️⃣ If it doesn't open, manually copy and paste this URL:\n\n";
+    } else {
+        std::cout << "1️⃣ No browser can be opened from this session - you must open the URL yourself\n";
+        std::cout << "2️⃣ Copy and paste this URL into a browser:\n\n";
+    }
 
     std::cout << " 🌐  " << auth_url << "\n\n";
 
@@ -412,6 +427,24 @@ void OAuth2FlowV2::DisplayOAuth2Instructions(const std::string& auth_url) {
     std::cout << "💡 Tip: Make sure to use your company/enterprise browser session, not private/incognito mode\n\n";
 }
 
+void OAuth2FlowV2::ExplainManualAuthorizationStep(const std::string &url,
+                                                  const std::string &reason) {
+    // On the CONSOLE, not only into the trace. This used to be traced and the flow carried
+    // on; traces are off by default, so a user on a headless session saw no explanation at
+    // all - a sixty-second pause, then "Timeout waiting for OAuth2 callback".
+    // See DataZooDE/datazoo-oauth2#11.
+    std::cout << std::endl
+              << "!!  Could not open a browser automatically: " << reason << std::endl
+              << "    The callback listener is already running, so opening the URL above "
+                 "yourself still works." << std::endl
+              << std::endl
+              << "    On a remote or headless machine the redirect goes to localhost, so "
+                 "forward the" << std::endl
+              << "    callback port first, e.g.  ssh -L 65000:localhost:65000 <host>"
+              << std::endl
+              << std::endl;
+}
+
 void OAuth2FlowV2::OpenBrowser(const std::string& url) {
     ERPL_TRACE_INFO("OAUTH2_FLOW", "Opening browser with URL: " + url);
 
@@ -419,8 +452,10 @@ void OAuth2FlowV2::OpenBrowser(const std::string& url) {
         OAuth2Browser::OpenUrl(url);
         ERPL_TRACE_INFO("OAUTH2_FLOW", "Browser opened successfully");
     } catch (const std::exception& e) {
+        // Reached when a browser looked available but the opener still failed - xdg-open
+        // exiting non-zero, which used to be discarded along with the child's status.
         ERPL_TRACE_WARN("OAUTH2_FLOW", "Failed to open browser automatically: " + std::string(e.what()));
-        ERPL_TRACE_INFO("OAUTH2_FLOW", "Please manually open: " + url);
+        ExplainManualAuthorizationStep(url, e.what());
     }
 }
 
