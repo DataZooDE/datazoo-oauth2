@@ -17,6 +17,15 @@ using namespace erpl_web;
 //
 // Three 60-second hangs in a row is how this was found. See DataZooDE/datazoo-oauth2#11.
 
+// Everything below is Linux-specific and guarded as such: CanOpenBrowser() returns true
+// unconditionally on Windows and macOS, where DISPLAY and WAYLAND_DISPLAY mean nothing, so
+// there is no behaviour here to assert on those platforms.
+//
+// The guard includes the ScopedEnv helper, which it previously did not. setenv/unsetenv are
+// POSIX and MSVC has neither, so the helper broke the Windows build even though every test
+// using it was already excluded. Compiled-but-unused code still has to compile.
+#if !defined(_WIN32) && !defined(__APPLE__)
+
 namespace {
 
 // Saves and restores an environment variable so the cases cannot leak into each other or
@@ -53,8 +62,6 @@ private:
 };
 
 }  // namespace
-
-#if !defined(_WIN32) && !defined(__APPLE__)
 
 TEST_CASE("no graphical session means no browser", "[oauth2_browser]") {
     // The case that was silently mishandled. A headless Linux session has neither variable
