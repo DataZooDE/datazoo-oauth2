@@ -21,6 +21,21 @@
 
 namespace erpl_web {
 
+namespace {
+
+// Served for a request that does not carry this flow's state: say nothing
+// about the flow, reflect nothing from the request.
+void ServeUnrelatedRequestPage(duckdb_httplib_openssl::Response& res) {
+    res.status = 400;
+    res.set_content(
+        "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Not a sign-in in progress</title></head>"
+        "<body><p>This request does not belong to a sign-in in progress. You can close this window.</p>"
+        "</body></html>",
+        "text/html");
+}
+
+} // namespace
+
 
 
 
@@ -37,11 +52,8 @@ OAuth2Server::~OAuth2Server() {
 std::string OAuth2Server::StartAndWaitForCode(const std::string& expected_state, int port) {
     ERPL_TRACE_INFO("OAUTH2_SERVER", "Starting server and waiting for code...");
 
-    // Use provided port or default port
-    int server_port = (port > 0) ? port : port_;
-
-    // Simple approach: run server in main thread with wait loop
-    return WaitForCallback(expected_state, server_port);
+    Start(expected_state, port);
+    return WaitForCode();
 }
 
 void OAuth2Server::Stop() {
@@ -68,8 +80,9 @@ void OAuth2Server::Stop() {
 
 
 
-std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int port) {
+void OAuth2Server::Start(const std::string& expected_state, int requested_port) {
     ERPL_TRACE_DEBUG("OAUTH2_SERVER", "Setting up callback handler...");
+    const int port = (requested_port > 0) ? requested_port : port_;
 
     // Reset handler for new flow
     callback_handler_->Reset();
@@ -87,10 +100,15 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
             std::string code = req.get_param_value("code");
             std::string state = req.get_param_value("state");
 
-            ERPL_TRACE_INFO("OAUTH2_SERVER", std::string("Received OAuth callback with code=") + code.substr(0, 10) + "... state=" + state);
+            // Neither the code nor the state is traced.
+            ERPL_TRACE_INFO("OAUTH2_SERVER", "Received an OAuth callback");
 
-            // Handle the callback
-            callback_handler_->HandleCallback(code, state);
+            // A request without this flow's state (any web page can navigate
+            // here while we wait) is ignored: generic page, flow unaffected.
+            if (!callback_handler_->HandleCallback(code, state)) {
+                ServeUnrelatedRequestPage(res);
+                return;
+            }
 
             // Serve success page
             res.set_content(
@@ -147,10 +165,11 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
             std::string error_description = req.get_param_value("error_description");
             std::string state = req.get_param_value("state");
 
+            if (!callback_handler_->HandleError(error, error_description, state)) {
+                ServeUnrelatedRequestPage(res);
+                return;
+            }
             ERPL_TRACE_WARN("OAUTH2_SERVER", std::string("Received OAuth error: ") + error + " - " + error_description);
-
-            // Handle the error
-            callback_handler_->HandleError(error, error_description, state);
 
             // Serve error page
             res.set_content(
@@ -237,19 +256,23 @@ std::string OAuth2Server::WaitForCallback(const std::string& expected_state, int
     // Start server in background thread (httplib handles requests in its own thread pool)
     ERPL_TRACE_DEBUG("OAUTH2_SERVER", "Starting server in background thread...");
 
-    server_thread_ = std::thread([this, port]() {
-        if (!server_instance_->listen("localhost", port)) {
-            ERPL_TRACE_ERROR("OAUTH2_SERVER", "Failed to start server on port " + std::to_string(port));
-            return;
-        }
-    });
-
-    // Give server time to start
-    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-    // Simple wait loop in main thread - check every 250ms with 60 second timeout
-    ERPL_TRACE_INFO("OAUTH2_SERVER", "Waiting for OAuth callback (timeout: 60 seconds)...");
+    // Bind (and listen) synchronously, so that when Start() returns a redirect
+    // can no longer race the server: the kernel queues the connection even
+    // before the accept loop runs. Only then may the caller open the browser
+    // -- an existing browser session can redirect back within milliseconds.
+    // A port that cannot be bound is reported now, not as a timeout later.
+    if (!server_instance_->bind_to_port("localhost", port)) {
+        server_instance_.reset();
+        throw std::runtime_error("cannot listen on localhost:" + std::to_string(port) +
+                                 " for the OAuth2 redirect (is the port in use?)");
+    }
+    server_thread_ = std::thread([this]() { server_instance_->listen_after_bind(); });
     running_.store(true);
+}
+
+std::string OAuth2Server::WaitForCode() {
+    // Simple wait loop - check every 250ms with 60 second timeout
+    ERPL_TRACE_INFO("OAUTH2_SERVER", "Waiting for OAuth callback (timeout: 60 seconds)...");
 
     auto start_time = std::chrono::steady_clock::now();
     const auto timeout_duration = std::chrono::seconds(60);

@@ -27,41 +27,36 @@ void OAuth2CallbackHandler::SetExpectedState(const std::string& expected_state) 
     expected_state_ = expected_state;
 }
 
-void OAuth2CallbackHandler::HandleCallback(const std::string& code, const std::string& state) {
+bool OAuth2CallbackHandler::HandleCallback(const std::string& code, const std::string& state) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    ERPL_TRACE_INFO("OAUTH2_CALLBACK", std::string("Received callback with code=") + code.substr(0, 10) + "... state=" + state);
-
+    // Neither the code nor the state is traced: both are credentials for the
+    // few seconds they live.
     if (!ValidateState(state)) {
-        ERPL_TRACE_WARN("OAUTH2_CALLBACK", "State validation failed");
-        error_message_ = "State validation failed. Expected: " + expected_state_ + ", Received: " + state;
-        has_error_.store(true);
-        code_cv_.notify_all(); // Notify waiting threads
-        return;
+        ERPL_TRACE_WARN("OAUTH2_CALLBACK", "Ignoring a callback whose state does not match this flow");
+        return false;
     }
 
+    ERPL_TRACE_INFO("OAUTH2_CALLBACK", "Received the authorization callback");
     received_code_ = code;
     callback_received_.store(true);
-
-    ERPL_TRACE_DEBUG("OAUTH2_CALLBACK", "Successfully received code, notifying waiting threads");
     code_cv_.notify_all(); // Notify waiting threads
+    return true;
 }
 
-void OAuth2CallbackHandler::HandleError(const std::string& error, const std::string& error_description, const std::string& state) {
+bool OAuth2CallbackHandler::HandleError(const std::string& error, const std::string& error_description, const std::string& state) {
     std::lock_guard<std::mutex> lock(mutex_);
 
-    ERPL_TRACE_WARN("OAUTH2_CALLBACK", std::string("Received error: ") + error + " - " + error_description);
-
     if (!ValidateState(state)) {
-        ERPL_TRACE_WARN("OAUTH2_CALLBACK", "State validation failed for error");
-        error_message_ = "State validation failed for error. Expected: " + expected_state_ + ", Received: " + state;
-    } else {
-        error_message_ = "OAuth2 error: " + error + " - " + error_description;
+        ERPL_TRACE_WARN("OAUTH2_CALLBACK", "Ignoring an error callback whose state does not match this flow");
+        return false;
     }
 
+    ERPL_TRACE_WARN("OAUTH2_CALLBACK", std::string("Received error: ") + error + " - " + error_description);
+    error_message_ = "OAuth2 error: " + error + " - " + error_description;
     has_error_.store(true);
-    ERPL_TRACE_DEBUG("OAUTH2_CALLBACK", "Set error, notifying waiting threads");
     code_cv_.notify_all(); // Notify waiting threads
+    return true;
 }
 
 std::string OAuth2CallbackHandler::WaitForCode(std::chrono::seconds timeout) {
@@ -98,7 +93,16 @@ std::string OAuth2CallbackHandler::GetReceivedCode() const {
 }
 
 bool OAuth2CallbackHandler::ValidateState(const std::string& received_state) const {
-    return received_state == expected_state_;
+    // An unset expected state matches nothing. Compared in constant time: the
+    // state is a CSRF secret, and the loopback port is reachable by any page.
+    if (expected_state_.empty() || received_state.size() != expected_state_.size()) {
+        return false;
+    }
+    unsigned char diff = 0;
+    for (size_t i = 0; i < received_state.size(); i++) {
+        diff |= static_cast<unsigned char>(received_state[i] ^ expected_state_[i]);
+    }
+    return diff == 0;
 }
 
 } // namespace erpl_web

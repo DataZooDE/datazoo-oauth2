@@ -96,7 +96,6 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
 
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Stored PKCE code verifier");
     ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated code challenge: " + code_challenge);
-    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Generated state: " + state);
 
     // Build authorization URL
     std::string auth_url = BuildAuthorizationUrl(config, code_challenge, state);
@@ -106,6 +105,27 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
 
     // Open browser for user authorization
     ERPL_TRACE_INFO("OAUTH2_FLOW", "Opening browser for authorization");
+
+    // Extract port from redirect_uri (e.g., "http://localhost:8080/callback" -> 8080)
+    int callback_port = config.GetDefaultPort();
+    size_t port_start = config.redirect_uri.find("localhost:");
+    if (port_start != std::string::npos) {
+        port_start += 10; // length of "localhost:"
+        size_t port_end = config.redirect_uri.find_first_of("/?", port_start);
+        std::string port_str = (port_end != std::string::npos)
+            ? config.redirect_uri.substr(port_start, port_end - port_start)
+            : config.redirect_uri.substr(port_start);
+        try {
+            callback_port = std::stoi(port_str);
+        } catch (...) {
+            // Use default port if parsing fails
+        }
+    }
+    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Using callback port: " + std::to_string(callback_port));
+
+    // Listen BEFORE the browser opens: an existing browser session can redirect
+    // back immediately, and a redirect to a closed port is lost.
+    server_->Start(state, callback_port);
 
     // Asked once, so the instructions and the opener cannot disagree.
     const bool browser_available = OAuth2Browser::CanOpenBrowser();
@@ -125,26 +145,9 @@ std::string OAuth2FlowV2::ExecuteAuthorizationCodeFlow(const OAuth2Config& confi
     // Wait for authorization code with timeout
     ERPL_TRACE_INFO("OAUTH2_FLOW", "Waiting for authorization code");
 
-    // Extract port from redirect_uri (e.g., "http://localhost:8080/callback" -> 8080)
-    int callback_port = config.GetDefaultPort();
-    size_t port_start = config.redirect_uri.find("localhost:");
-    if (port_start != std::string::npos) {
-        port_start += 10; // length of "localhost:"
-        size_t port_end = config.redirect_uri.find_first_of("/?", port_start);
-        std::string port_str = (port_end != std::string::npos)
-            ? config.redirect_uri.substr(port_start, port_end - port_start)
-            : config.redirect_uri.substr(port_start);
-        try {
-            callback_port = std::stoi(port_str);
-        } catch (...) {
-            // Use default port if parsing fails
-        }
-    }
-    ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Using callback port: " + std::to_string(callback_port));
-
     try {
-        std::string auth_code = server_->StartAndWaitForCode(state, callback_port);
-        ERPL_TRACE_INFO("OAUTH2_FLOW", "Received authorization code: " + auth_code.substr(0, 10) + "...");
+        std::string auth_code = server_->WaitForCode();
+        ERPL_TRACE_INFO("OAUTH2_FLOW", "Received authorization code");
         ERPL_TRACE_DEBUG("OAUTH2_FLOW", "Authorization successful, received authorization code");
         return auth_code;
 
