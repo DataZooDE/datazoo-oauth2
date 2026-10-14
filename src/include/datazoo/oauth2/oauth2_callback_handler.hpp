@@ -24,11 +24,15 @@ public:
     // Set expected state for validation
     void SetExpectedState(const std::string& expected_state);
 
-    // Handle OAuth2 callback
-    void HandleCallback(const std::string& code, const std::string& state);
+    // Handle OAuth2 callback. Returns false -- and changes nothing -- when the
+    // state does not match: any web page can navigate the browser to the
+    // loopback port while the flow waits, and such a request must neither
+    // deliver a code nor abort the genuine sign-in.
+    bool HandleCallback(const std::string& code, const std::string& state);
 
-    // Handle OAuth2 error
-    void HandleError(const std::string& error, const std::string& error_description, const std::string& state);
+    // Handle OAuth2 error. Same rule: only an error carrying our state ends the
+    // flow; anything else is ignored (returns false).
+    bool HandleError(const std::string& error, const std::string& error_description, const std::string& state);
 
     // Wait for authorization code with timeout (mutex-based)
     std::string WaitForCode(std::chrono::seconds timeout = std::chrono::seconds(60));

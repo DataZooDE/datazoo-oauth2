@@ -29,7 +29,16 @@ public:
     OAuth2Server(OAuth2Server&&) = delete;
     OAuth2Server& operator=(OAuth2Server&&) = delete;
 
-    // Start server and wait for authorization code
+    // Bind localhost:port and start serving the redirect in the background.
+    // Returns once the port is listening (throws if it cannot be bound), so
+    // the caller can open the browser without racing the redirect.
+    void Start(const std::string& expected_state, int port = 0);
+
+    // After Start(): wait (60 s) for the redirect carrying the expected state.
+    std::string WaitForCode();
+
+    // Start() then WaitForCode(). Prefer the two calls, with the browser
+    // opened in between.
     std::string StartAndWaitForCode(const std::string& expected_state, int port = 0);
 
     // Stop server gracefully
@@ -48,8 +57,6 @@ private:
     std::unique_ptr<duckdb_httplib_openssl::Server> server_instance_;
     std::thread server_thread_;
 
-    // Simple wait loop in main thread
-    std::string WaitForCallback(const std::string& expected_state, int port);
 };
 
 } // namespace erpl_web
