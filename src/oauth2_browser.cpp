@@ -13,6 +13,7 @@
 #else
 #include <unistd.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 #endif
 
 namespace erpl_web {
@@ -128,7 +129,18 @@ void OAuth2Browser::OpenUrlLinux(const std::string& url) {
 #ifndef __APPLE__
     pid_t pid = fork();
     if (pid == 0) {
-        // Child process
+        // Child process. xdg-open and the browser it starts inherit our stdout
+        // and stderr, and both are chatty ("Opening in existing browser
+        // session.", Chromium zygote errors). The host's stdout carries query
+        // results, so the child's output goes to /dev/null.
+        const int devnull = ::open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            ::dup2(devnull, STDOUT_FILENO);
+            ::dup2(devnull, STDERR_FILENO);
+            if (devnull > STDERR_FILENO) {
+                ::close(devnull);
+            }
+        }
         execlp("xdg-open", "xdg-open", url.c_str(), NULL);
         _exit(127); // If execlp fails - _exit, not exit: no duplicate atexit handlers
     }
