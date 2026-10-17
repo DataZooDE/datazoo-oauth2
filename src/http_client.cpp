@@ -22,6 +22,7 @@
 #include "datazoo/oauth2/charset_converter.hpp"
 #include "datazoo/oauth2/http_client.hpp"
 #include "datazoo/oauth2/tracing.hpp"
+#include "duckdb_compat/dispatch.hpp"
 
 using namespace duckdb;
 
@@ -1410,7 +1411,7 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
 	}
 	c->set_decompress(true);
     // Control URL encoding behavior
-    c->set_url_encode(http_params.url_encode);
+    duckdb_compat::SetPathEncode(*c, http_params.url_encode);
 
     // Prevent TLS close_notify wait from blocking for 30 seconds during client destruction.
     // httplib's SSLClient::~SSLClient calls SSL_shutdown twice — the second call blocks
@@ -1418,7 +1419,7 @@ std::unique_ptr<duckdb_httplib_openssl::Client> HttpClient::CreateHttplibClient(
     // login.microsoftonline.com) don't respond promptly, causing a 30s hang per request.
     // SSL_CTX_set_quiet_shutdown(1) makes SSL_shutdown return immediately without waiting.
     {
-        auto ssl_ctx = c->ssl_context();
+        auto ssl_ctx = static_cast<SSL_CTX *>(duckdb_compat::TlsContext(*c));
         if (ssl_ctx) {
             SSL_CTX_set_quiet_shutdown(ssl_ctx, 1);
         }

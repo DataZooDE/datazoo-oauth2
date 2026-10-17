@@ -3,6 +3,7 @@
 #include "datazoo/oauth2/tracing.hpp"
 #include "duckdb/common/exception.hpp"
 #include "yyjson.hpp"
+#include "duckdb_compat/dispatch.hpp"
 #include <ctime>
 
 using namespace duckdb_yyjson;
@@ -153,7 +154,7 @@ void OAuth2SecretTokenManager::UpdateSecretWithTokens(duckdb::ClientContext &con
     ERPL_TRACE_DEBUG("OAUTH2_TOKEN_MANAGER", "Updating secret with new token");
 
     auto &secret_manager = duckdb::SecretManager::Get(context);
-    auto secret_name = kv_secret->GetName();
+    const std::string secret_name = duckdb_compat::Str(kv_secret->GetName());
     if (secret_name.empty()) {
         ERPL_TRACE_WARN("OAUTH2_TOKEN_MANAGER", "Secret has no name; refreshed token will not be persisted");
         return;

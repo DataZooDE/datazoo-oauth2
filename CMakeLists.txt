@@ -65,6 +65,23 @@ if(DATAZOO_OAUTH2_HAS_PARENT)
     )
     target_include_directories(datazoo_oauth2 PUBLIC src/include)
     target_compile_features(datazoo_oauth2 PUBLIC cxx_std_17)
+
+    # DuckDB 1.4 LTS / 1.5 / 2.0 from one source tree: the API-shape shims
+    # (Identifier secret names, httplib renames) come from DataZooDE/duckdb-compat,
+    # which the CONSUMER adds -- add_subdirectory(duckdb-compat) before this
+    # directory -- exactly as it already provides duckdb.hpp and httplib.
+    if(NOT TARGET duckdb_compat)
+        message(FATAL_ERROR
+            "datazoo-oauth2 needs the duckdb_compat target: add the "
+            "DataZooDE/duckdb-compat submodule and add_subdirectory() it before datazoo-oauth2.")
+    endif()
+    # Include path only, NOT a link: DuckDB export()s and install(EXPORT)s
+    # every extension target with its link dependencies, and any link to
+    # duckdb_compat -- PUBLIC, PRIVATE or $<BUILD_INTERFACE:> -- fails the
+    # generate step ("requires target duckdb_compat that is not in any export
+    # set"). The shims are header-only and used only inside our .cpp files.
+    get_target_property(DUCKDB_COMPAT_INCLUDE duckdb_compat INTERFACE_INCLUDE_DIRECTORIES)
+    target_include_directories(datazoo_oauth2 PRIVATE ${DUCKDB_COMPAT_INCLUDE})
     target_link_libraries(datazoo_oauth2 PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 
     # See the note on the unit-test target below: oauth2_browser.cpp needs
