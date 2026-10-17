@@ -75,7 +75,10 @@ if(DATAZOO_OAUTH2_HAS_PARENT)
             "datazoo-oauth2 needs the duckdb_compat target: add the "
             "DataZooDE/duckdb-compat submodule and add_subdirectory() it before datazoo-oauth2.")
     endif()
-    target_link_libraries(datazoo_oauth2 PUBLIC duckdb_compat)
+    # PRIVATE + BUILD_INTERFACE: the shims are used only inside our .cpp files,
+    # and DuckDB install(EXPORT)s extension targets -- a plain link would drag
+    # duckdb_compat into DuckDB's export set and fail the CMake generate step.
+    target_link_libraries(datazoo_oauth2 PRIVATE $<BUILD_INTERFACE:duckdb_compat>)
     target_link_libraries(datazoo_oauth2 PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 
     # See the note on the unit-test target below: oauth2_browser.cpp needs
