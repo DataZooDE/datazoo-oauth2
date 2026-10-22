@@ -66,7 +66,7 @@ if(DATAZOO_OAUTH2_HAS_PARENT)
     target_include_directories(datazoo_oauth2 PUBLIC src/include)
     target_compile_features(datazoo_oauth2 PUBLIC cxx_std_17)
 
-    # DuckDB 1.4 LTS / 1.5 / 2.0 from one source tree: the API-shape shims
+    # DuckDB 1.5 / 2.0 from one source tree: the API-shape shims
     # (Identifier secret names, httplib renames) come from DataZooDE/duckdb-compat,
     # which the CONSUMER adds -- add_subdirectory(duckdb-compat) before this
     # directory -- exactly as it already provides duckdb.hpp and httplib.
